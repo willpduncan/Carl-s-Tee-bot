@@ -1,0 +1,14 @@
+[Unit]
+Description=TeeBot IMAP poller (one-shot, fires every 30s via timer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=teebot
+Group=teebot
+EnvironmentFile=/etc/teebot/secrets.env
+WorkingDirectory=/opt/teebot
+ExecStart=/opt/teebot/.venv/bin/python /opt/teebot/scripts/run_poller.py
+StandardOutput=journal
+StandardError=journal

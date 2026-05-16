@@ -1,0 +1,10 @@
+[Unit]
+Description=Run TeeBot booker daily at 7:58 AM Central
+
+[Timer]
+OnCalendar=*-*-* 07:58:00 America/Chicago
+AccuracySec=1s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

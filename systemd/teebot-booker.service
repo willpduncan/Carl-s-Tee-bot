@@ -1,0 +1,14 @@
+[Unit]
+Description=TeeBot daily 8 AM booker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=teebot
+Group=teebot
+EnvironmentFile=/etc/teebot/secrets.env
+WorkingDirectory=/opt/teebot
+ExecStart=/opt/teebot/.venv/bin/python /opt/teebot/scripts/run_booker.py
+StandardOutput=journal
+StandardError=journal
