@@ -1,6 +1,10 @@
 """Entry point invoked by systemd timer at 7:58 AM Central daily."""
 import sys
 from datetime import date
+from pathlib import Path
+
+# Bootstrap import path: make `teebot` (in ../src) importable
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from teebot.booker_orchestrator import BookerOrchestrator
 from teebot.config import Config

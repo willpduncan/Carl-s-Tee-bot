@@ -1,6 +1,10 @@
 """Entry point invoked by systemd timer every 30s."""
 import sys
 from datetime import date
+from pathlib import Path
+
+# Bootstrap import path: make `teebot` (in ../src) importable
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from teebot.config import Config
 from teebot.db import connect

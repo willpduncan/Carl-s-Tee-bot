@@ -15,8 +15,11 @@ from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-# Make sibling scripts importable as modules
-sys.path.insert(0, str(Path(__file__).parent))
+# Bootstrap import paths so `teebot` (in src/) and sibling scripts are importable
+# without requiring `pip install`. Works in any deployment context.
+_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_ROOT / "src"))
+sys.path.insert(0, str(_ROOT / "scripts"))
 
 from run_booker import main as booker_main
 from run_poller import main as poller_main

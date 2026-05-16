@@ -1,5 +1,9 @@
 """Idempotently initialize the teebot SQLite database."""
 import sys
+from pathlib import Path
+
+# Bootstrap import path: make `teebot` (in ../src) importable
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from teebot.config import Config
 from teebot.db import connect, init_schema
