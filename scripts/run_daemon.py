@@ -23,12 +23,26 @@ sys.path.insert(0, str(_ROOT / "scripts"))
 
 from run_booker import main as booker_main
 from run_poller import main as poller_main
+from teebot.config import Config
+from teebot.db import connect, init_schema
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 log = logging.getLogger("teebot.daemon")
+
+
+def _ensure_db_initialized() -> None:
+    """Idempotently create the SQLite schema. Safe to call on every boot —
+    init_schema uses CREATE TABLE IF NOT EXISTS."""
+    cfg = Config.from_env()
+    conn = connect(cfg.db_path)
+    try:
+        init_schema(conn)
+        log.info("Database ready at %s", cfg.db_path)
+    finally:
+        conn.close()
 
 CHICAGO = ZoneInfo("America/Chicago")
 
@@ -52,6 +66,7 @@ def main() -> int:
     last_booker_date: date | None = None
     log.info("Daemon starting — poll every %ds, booker window 7:58–7:59 Central",
              POLL_INTERVAL_SEC)
+    _ensure_db_initialized()
 
     while True:
         # Always run the poller (cheap, handles errors internally)
