@@ -11,7 +11,7 @@ import logging
 import os
 import sys
 import time
-from datetime import date, datetime
+from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -21,10 +21,12 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT / "src"))
 sys.path.insert(0, str(_ROOT / "scripts"))
 
-from run_booker import main as booker_main
+from run_booker import _send_result_email, main as booker_main
 from run_poller import main as poller_main
+from teebot.booker_orchestrator import BookerOrchestrator
 from teebot.config import Config
 from teebot.db import connect, init_schema
+from teebot.mailer import Mailer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,6 +43,73 @@ def _ensure_db_initialized() -> None:
     try:
         init_schema(conn)
         log.info("Database ready at %s", cfg.db_path)
+    finally:
+        conn.close()
+
+
+def _book_immediately_for_open_dates(cfg: Config) -> None:
+    """For any pending request whose target_date is already inside the 5-day
+    open window, fire the booker right now (skipping warm-hold + race-wait).
+
+    This makes the bot intelligent about timing:
+      - Request for a date that opens at 8 AM tomorrow → daily cron handles it
+      - Request for a date that's already open → book ASAP
+    """
+    tz = ZoneInfo(cfg.timezone)
+    today = datetime.now(tz).date()
+    earliest = today + timedelta(days=1)
+    latest = today + timedelta(days=5)
+
+    conn = connect(cfg.db_path)
+    try:
+        rows = conn.execute(
+            """SELECT target_date FROM requests
+                 WHERE status = 'pending'
+                   AND target_date BETWEEN ? AND ?
+                 ORDER BY target_date""",
+            (earliest.isoformat(), latest.isoformat()),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return
+
+    for row in rows:
+        target_date = date.fromisoformat(row["target_date"])
+        offset = (target_date - today).days
+        log.info("Auto-booking already-open date %s (offset=%d)",
+                 target_date, offset)
+        _run_immediate_booker(cfg, offset, today, tz)
+
+
+def _run_immediate_booker(cfg: Config, offset: int, today: date,
+                          tz: ZoneInfo) -> None:
+    """Run the booker for a specific offset right now, with race_at = now
+    so warm_hold and wait_until_T0 collapse to no-ops."""
+    conn = connect(cfg.db_path)
+    try:
+        now_local = datetime.now(tz)
+        race_now = dtime(now_local.hour, now_local.minute, now_local.second)
+        orch = BookerOrchestrator(
+            db=conn,
+            today=today,
+            target_offset_days=offset,
+            member_id="10326",
+            member_name="Carl A Pfiffner",
+            member_user="6605",
+            foretees_username=cfg.foretees_username,
+            foretees_password=cfg.foretees_password,
+            tz=cfg.timezone,
+            race_at_local_time=race_now,
+        )
+        outcome = orch.run()
+        mailer = Mailer(
+            api_key=cfg.sendgrid_api_key,
+            from_email=cfg.bot_gmail_address,
+            from_name="Carl's Tee Bot",
+        )
+        _send_result_email(cfg, mailer, outcome)
     finally:
         conn.close()
 
@@ -75,7 +144,14 @@ def main() -> int:
         except Exception:
             log.exception("Poller iteration failed")
 
-        # Check booker fire window
+        # Auto-book any pending requests for dates already in the open window
+        try:
+            cfg = Config.from_env()
+            _book_immediately_for_open_dates(cfg)
+        except Exception:
+            log.exception("Immediate-book iteration failed")
+
+        # Check booker fire window (the 8 AM race for tomorrow-opening dates)
         now = datetime.now(CHICAGO)
         today = now.date()
         if last_booker_date != today and _in_booker_window(now):
@@ -85,8 +161,6 @@ def main() -> int:
                 last_booker_date = today
             except Exception:
                 log.exception("Booker iteration failed")
-                # Still mark as fired so we don't retry on next poll loop;
-                # operator must investigate via audit_log + emergency runbook
                 last_booker_date = today
 
         time.sleep(POLL_INTERVAL_SEC)
