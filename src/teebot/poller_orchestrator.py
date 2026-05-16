@@ -180,22 +180,33 @@ class PollerOrchestrator:
         ))
 
     def run_once(self) -> None:
+        import logging
+        log = logging.getLogger("teebot.poller")
+
         messages = self.inbox.fetch_unread()
+        if messages:
+            log.info("Found %d unread message(s) to process", len(messages))
         for msg in messages:
+            log.info("Processing UID=%s from sender=%s", msg.uid, msg.sender)
             try:
                 in_reply_to = self._get_in_reply_to(msg.raw)
                 if in_reply_to:
                     booking = self._find_booking_by_confirmation_id(in_reply_to)
                     if booking is not None:
+                        log.info("Handling as partner reply (booking_id=%s)", booking["id"])
                         self._handle_partner_reply(msg.raw, booking, in_reply_to=in_reply_to)
                         self.inbox.mark_seen(msg.uid)
                         continue
                 # Not a partner reply — classify as cancel or request
                 if parse_cancel(msg.raw):
+                    log.info("Handling as cancel request")
                     self._handle_cancel(msg)
                 else:
+                    log.info("Handling as new tee-time request")
                     self._handle_request(msg)
+                log.info("Successfully processed UID=%s", msg.uid)
             except Exception as e:
+                log.exception("Failed to process UID=%s: %s", msg.uid, e)
                 self._audit("poller_error", success=False, uid=msg.uid, error=str(e))
             finally:
                 self.inbox.mark_seen(msg.uid)
