@@ -113,7 +113,7 @@ def main() -> int:
         )
         outcome = orch.run()
         mailer = Mailer(
-            smtp_host="smtp.gmail.com", smtp_port=587,
+            smtp_host="smtp.gmail.com", smtp_port=465,
             username=cfg.bot_gmail_address, app_password=cfg.bot_gmail_app_password,
         )
         _send_result_email(cfg, mailer, outcome)
