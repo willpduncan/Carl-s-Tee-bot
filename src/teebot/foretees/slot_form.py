@@ -21,23 +21,37 @@ class SlotFormData:
 
 
 def fetch_slot_form(session: ForeTeesSession, slot: Slot, target_date_str: str) -> SlotFormData:
-    """POST Member_slot to render the slot's booking form."""
-    payload = {
-        "lstate": "0",
-        "newreq": "yes",
-        "displayOpt": "0",
-        "showAvail": "-1",
-        "ttdata": slot.ttdata,
-        "date": target_date_str,
-        "index": str(slot.index),
-        "course": slot.course,
-        "returnCourse": "-ALL-",
-        "wasP1": "", "wasP2": "", "wasP3": "", "wasP4": "", "wasP5": "",
-        "p5": "Yes",
-        "time:0": _to_12h(slot.time),
-        "day": slot.day_of_week,
-        "contimes": "1",
-    }
+    """POST Member_slot to render the slot's booking form.
+
+    Uses the raw data-ftjson payload from the tee-sheet listing if available
+    (most accurate — mirrors what the browser sends). Falls back to a
+    field-by-field reconstruction if raw_data wasn't captured.
+    """
+    if slot.raw_data:
+        # Build payload from the captured data-ftjson, dropping the 'type' key
+        # which is a client-side marker, not a server field.
+        payload = {k: ("" if v is None else str(v))
+                   for k, v in slot.raw_data.items() if k != "type"}
+        # Ensure these are present
+        payload.setdefault("contimes", "1")
+        payload.setdefault("day", slot.day_of_week)
+    else:
+        payload = {
+            "lstate": "0",
+            "newreq": "yes",
+            "displayOpt": "0",
+            "showAvail": "-1",
+            "ttdata": slot.ttdata,
+            "date": target_date_str,
+            "index": str(slot.index),
+            "course": slot.course,
+            "returnCourse": "-ALL-",
+            "wasP1": "", "wasP2": "", "wasP3": "", "wasP4": "", "wasP5": "",
+            "p5": "Yes",
+            "time:0": _to_12h(slot.time),
+            "day": slot.day_of_week,
+            "contimes": "1",
+        }
     r = session.client.post(MEMBER_SLOT_URL, data=payload)
     r.raise_for_status()
     return parse_slot_form(r.text)

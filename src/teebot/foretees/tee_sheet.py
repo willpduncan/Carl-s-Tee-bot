@@ -1,15 +1,20 @@
-"""Fetch and parse the Member_sheet tee-sheet listing."""
+"""Fetch and parse the Member_sheet tee-sheet listing.
+
+Each bookable slot in the rendered HTML carries a ``data-ftjson`` attribute
+containing a JSON object with all the Member_slot POST parameters needed
+to book it — including the per-slot ``ttdata`` token. The parser extracts
+those JSON blobs and translates each one into a Slot record.
+"""
 from __future__ import annotations
 
-import html
+import html as html_module
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 
-from bs4 import BeautifulSoup
-
 from .session import ForeTeesSession
+
 
 TEE_SHEET_URL_TEMPLATE = (
     "https://www1.foretees.com/v5/pfcc_golf_m56/Member_sheet"
@@ -20,14 +25,16 @@ TEE_SHEET_URL_TEMPLATE = (
 @dataclass(frozen=True)
 class Slot:
     time: str            # 'HH:MM' 24-hour
-    course: str
-    ttdata: str
-    index: int
-    day_of_week: str
-    available: bool
+    course: str          # e.g., 'Green to Gold'
+    ttdata: str          # per-slot server-issued token (required for booking)
+    index: int           # the 'jump' value from data-ftjson
+    day_of_week: str     # empty if unknown; bot fills from the request's day
+    available: bool      # True if wasP1 is empty (no existing primary player)
+    raw_data: dict = field(default_factory=dict)  # full parsed data-ftjson payload
 
 
 def fetch_tee_sheet_html(session: ForeTeesSession, target: date) -> str:
+    """GET the Member_sheet endpoint for the target date."""
     cal_date = target.strftime("%m/%d/%Y")
     url = TEE_SHEET_URL_TEMPLATE.format(cal_date=cal_date)
     r = session.client.get(url)
@@ -49,68 +56,60 @@ def _to_24h(time_12h: str) -> str:
     return f"{h:02d}:{mi:02d}"
 
 
-def parse_tee_sheet(html_text: str) -> list[Slot]:
-    """Extract all bookable slot records from the Member_sheet HTML.
+_FTJSON_RE = re.compile(r'data-ftjson="([^"]+)"')
 
-    The ForeTees tee-sheet encodes each available slot as an anchor tag with
-    class ``teetime_button`` and a ``data-ftjson`` attribute containing a JSON
-    object.  The relevant fields in that JSON are:
 
-    * ``ttdata``  – opaque security token required for the booking POST
-    * ``index``   – per-course slot index (integer)
-    * ``course``  – course name string
-    * ``day``     – day-of-week string (e.g. "Wednesday")
-    * ``time:0``  – slot time in 12-hour format (e.g. "7:00 AM")
+def _full_unescape(s: str) -> str:
+    """HTML-unescape repeatedly until stable.
 
-    Booked (unavailable) slots render as plain ``<span class="time_text">``
-    elements with no ``data-ftjson``; those are *not* included in the output.
-
-    Returns a list of :class:`Slot` instances (one per bookable time slot).
+    Chrome's view-source export double-encodes attribute entities
+    (&quot; → &amp;quot;), while a fresh HTTP response is single-encoded.
+    The parser handles both by unescaping until idempotent.
     """
-    soup = BeautifulSoup(html_text, "lxml")
-    slots: list[Slot] = []
+    prev = s
+    for _ in range(5):
+        cur = html_module.unescape(prev)
+        if cur == prev:
+            return cur
+        prev = cur
+    return prev
 
-    for anchor in soup.find_all("a", class_="teetime_button"):
-        raw_json = anchor.get("data-ftjson", "")
-        if not raw_json:
-            continue
+
+def parse_tee_sheet(html: str) -> list[Slot]:
+    """Extract bookable Slot records from a Member_sheet response."""
+    slots: list[Slot] = []
+    for raw_attr in _FTJSON_RE.findall(html):
+        decoded = _full_unescape(raw_attr)
         try:
-            data = json.loads(raw_json)
+            data = json.loads(decoded)
         except json.JSONDecodeError:
+            continue
+        if data.get("type") != "Member_slot":
+            continue
+
+        time_12h = data.get("time:0", "")
+        try:
+            time_24 = _to_24h(time_12h) if time_12h else ""
+        except ValueError:
+            continue
+        if not time_24:
             continue
 
         ttdata = data.get("ttdata", "")
         if not ttdata:
             continue
 
-        time_12h = data.get("time:0", "")
-        if not time_12h:
-            continue
+        # Availability: wasP1 empty means no primary player has claimed the slot
+        was_p1 = (data.get("wasP1") or "").strip()
+        available = (was_p1 == "")
 
-        try:
-            time_24h = _to_24h(time_12h)
-        except ValueError:
-            continue
-
-        course = data.get("course", "")
-        day = data.get("day", "")
-        raw_index = data.get("index", None)
-        if raw_index is None:
-            continue
-        try:
-            index = int(raw_index)
-        except (TypeError, ValueError):
-            continue
-
-        slots.append(
-            Slot(
-                time=time_24h,
-                course=course,
-                ttdata=ttdata,
-                index=index,
-                day_of_week=day,
-                available=True,
-            )
-        )
-
+        slots.append(Slot(
+            time=time_24,
+            course=data.get("course", ""),
+            ttdata=ttdata,
+            index=int(data.get("jump", data.get("index", 0))),
+            day_of_week="",
+            available=available,
+            raw_data=data,
+        ))
     return slots
