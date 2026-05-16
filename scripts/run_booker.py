@@ -113,8 +113,9 @@ def main() -> int:
         )
         outcome = orch.run()
         mailer = Mailer(
-            smtp_host="smtp.gmail.com", smtp_port=465,
-            username=cfg.bot_gmail_address, app_password=cfg.bot_gmail_app_password,
+            api_key=cfg.sendgrid_api_key,
+            from_email=cfg.bot_gmail_address,
+            from_name="Carl's Tee Bot",
         )
         _send_result_email(cfg, mailer, outcome)
 

@@ -38,6 +38,7 @@ class Config:
     operator_email: str
     timezone: str
     db_path: str
+    sendgrid_api_key: str = field(repr=False)
 
     @classmethod
     def from_env(cls) -> Config:
@@ -51,4 +52,5 @@ class Config:
             operator_email=_required("OPERATOR_EMAIL"),
             timezone=_required("TIMEZONE"),
             db_path=_required("DB_PATH"),
+            sendgrid_api_key=_required("SENDGRID_API_KEY"),
         )

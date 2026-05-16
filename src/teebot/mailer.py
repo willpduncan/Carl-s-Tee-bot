@@ -1,33 +1,17 @@
-"""SMTP sender for outbound emails."""
+"""HTTP-based email sender via the SendGrid API.
+
+Railway (and many other PaaS providers) block outbound SMTP on
+ports 25/465/587, so we use SendGrid's HTTPS API (port 443) instead.
+"""
 from __future__ import annotations
 
-import contextlib
-import smtplib
-import socket
-import ssl
 import uuid
 from dataclasses import dataclass
-from email.message import EmailMessage
+
+import httpx
 
 
-@contextlib.contextmanager
-def _force_ipv4():
-    """Temporarily monkey-patch socket.getaddrinfo to resolve IPv4 only.
-
-    Many cloud hosts (including Railway) have no IPv6 routing — DNS
-    returns AAAA records for smtp.gmail.com and the kernel can't reach
-    them, raising ENETUNREACH. Forcing IPv4 sidesteps the issue.
-    """
-    original = socket.getaddrinfo
-
-    def _ipv4_only(host, port, family=0, type=0, proto=0, flags=0):
-        return original(host, port, socket.AF_INET, type, proto, flags)
-
-    socket.getaddrinfo = _ipv4_only
-    try:
-        yield
-    finally:
-        socket.getaddrinfo = original
+SENDGRID_API_URL = "https://api.sendgrid.com/v3/mail/send"
 
 
 @dataclass(frozen=True)
@@ -36,43 +20,54 @@ class OutgoingEmail:
     subject: str
     body: str
     in_reply_to: str | None = None
-    from_address: str | None = None  # defaults to Mailer's username
+    from_address: str | None = None  # defaults to Mailer's verified sender
 
 
 class Mailer:
-    """Sends mail via Gmail SMTP.
+    """Sends transactional email via SendGrid HTTP API."""
 
-    Uses SSL on port 465 by default (more reliable across cloud hosts that
-    may block port 587). Pass smtp_port=587 to use STARTTLS instead.
-    """
-
-    def __init__(self, smtp_host: str, smtp_port: int, username: str, app_password: str):
-        self._host = smtp_host
-        self._port = smtp_port
-        self._user = username
-        self._pw = app_password
+    def __init__(self, api_key: str, from_email: str, from_name: str = ""):
+        self._key = api_key
+        self._from_email = from_email
+        self._from_name = from_name
 
     def send(self, email: OutgoingEmail) -> str:
-        msg = EmailMessage()
-        msg_id = f"<{uuid.uuid4()}@teebot.local>"
-        msg["Message-ID"] = msg_id
-        msg["From"] = email.from_address or self._user
-        msg["To"] = email.to
-        msg["Subject"] = email.subject
-        if email.in_reply_to:
-            msg["In-Reply-To"] = email.in_reply_to
-            msg["References"] = email.in_reply_to
-        msg.set_content(email.body)
+        """Send an email. Returns the generated Message-ID for threading.
 
-        with _force_ipv4():
-            if self._port == 465:
-                with smtplib.SMTP_SSL(self._host, self._port,
-                                      context=ssl.create_default_context()) as smtp:
-                    smtp.login(self._user, self._pw)
-                    smtp.send_message(msg)
-            else:
-                with smtplib.SMTP(self._host, self._port) as smtp:
-                    smtp.starttls()
-                    smtp.login(self._user, self._pw)
-                    smtp.send_message(msg)
+        Raises RuntimeError on non-2xx response from SendGrid.
+        """
+        msg_id = f"<{uuid.uuid4()}@teebot.local>"
+        sender = email.from_address or self._from_email
+        from_block: dict[str, str] = {"email": sender}
+        if self._from_name:
+            from_block["name"] = self._from_name
+
+        headers: dict[str, str] = {"Message-ID": msg_id}
+        if email.in_reply_to:
+            headers["In-Reply-To"] = email.in_reply_to
+            headers["References"] = email.in_reply_to
+
+        payload = {
+            "personalizations": [{
+                "to": [{"email": email.to}],
+                "headers": headers,
+            }],
+            "from": from_block,
+            "subject": email.subject,
+            "content": [{"type": "text/plain", "value": email.body}],
+        }
+
+        response = httpx.post(
+            SENDGRID_API_URL,
+            headers={
+                "Authorization": f"Bearer {self._key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=30.0,
+        )
+        if response.status_code not in (200, 202):
+            raise RuntimeError(
+                f"SendGrid returned {response.status_code}: {response.text[:200]}"
+            )
         return msg_id

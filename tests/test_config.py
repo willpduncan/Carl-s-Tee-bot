@@ -15,6 +15,7 @@ def test_loads_required_env(monkeypatch):
     monkeypatch.setenv("OPERATOR_EMAIL", "willpduncan@gmail.com")
     monkeypatch.setenv("TIMEZONE", "America/Chicago")
     monkeypatch.setenv("DB_PATH", "/tmp/teebot.db")
+    monkeypatch.setenv("SENDGRID_API_KEY", "SG.test")
 
     cfg = Config.from_env()
     assert cfg.foretees_username == "Pfifftex"
@@ -23,6 +24,7 @@ def test_loads_required_env(monkeypatch):
     assert cfg.carl_email == "cpfiffner62@gmail.com"
     assert cfg.operator_email == "willpduncan@gmail.com"
     assert cfg.timezone == "America/Chicago"
+    assert cfg.sendgrid_api_key == "SG.test"
 
 
 def test_missing_env_raises(monkeypatch):
@@ -44,8 +46,10 @@ def test_password_not_in_repr(monkeypatch):
     monkeypatch.setenv("OPERATOR_EMAIL", "x@y.com")
     monkeypatch.setenv("TIMEZONE", "America/Chicago")
     monkeypatch.setenv("DB_PATH", "/tmp/teebot.db")
+    monkeypatch.setenv("SENDGRID_API_KEY", "SG.sendgrid-secret")
 
     cfg = Config.from_env()
     r = repr(cfg)
     assert "supersecret123" not in r
     assert "appsecret" not in r
+    assert "SG.sendgrid-secret" not in r
