@@ -50,10 +50,6 @@ def _ensure_db_initialized() -> None:
 def _book_immediately_for_open_dates(cfg: Config) -> None:
     """For any pending request whose target_date is already inside the 5-day
     open window, fire the booker right now (skipping warm-hold + race-wait).
-
-    This makes the bot intelligent about timing:
-      - Request for a date that opens at 8 AM tomorrow → daily cron handles it
-      - Request for a date that's already open → book ASAP
     """
     tz = ZoneInfo(cfg.timezone)
     today = datetime.now(tz).date()
@@ -63,14 +59,25 @@ def _book_immediately_for_open_dates(cfg: Config) -> None:
     conn = connect(cfg.db_path)
     try:
         rows = conn.execute(
-            """SELECT target_date FROM requests
+            """SELECT target_date, status FROM requests
                  WHERE status = 'pending'
                    AND target_date BETWEEN ? AND ?
                  ORDER BY target_date""",
             (earliest.isoformat(), latest.isoformat()),
         ).fetchall()
+        # Diagnostic: also show all pending rows regardless of date
+        all_pending = conn.execute(
+            "SELECT target_date FROM requests WHERE status = 'pending'"
+        ).fetchall()
     finally:
         conn.close()
+
+    log.info(
+        "Immediate-book check: today=%s window=[%s, %s] in-window pending=%d "
+        "all pending=%s",
+        today, earliest, latest, len(rows),
+        [r["target_date"] for r in all_pending],
+    )
 
     if not rows:
         return
