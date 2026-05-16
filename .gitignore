@@ -1,0 +1,27 @@
+# Secrets — never commit
+secrets.env
+/etc/teebot/
+*.env
+
+# Database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+/var/lib/teebot/
+
+# HAR captures (contain session cookies)
+*.har
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
+
+# Logs
+*.log
+/var/log/teebot/
