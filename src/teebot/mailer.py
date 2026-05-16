@@ -1,11 +1,33 @@
 """SMTP sender for outbound emails."""
 from __future__ import annotations
 
+import contextlib
 import smtplib
+import socket
 import ssl
 import uuid
 from dataclasses import dataclass
 from email.message import EmailMessage
+
+
+@contextlib.contextmanager
+def _force_ipv4():
+    """Temporarily monkey-patch socket.getaddrinfo to resolve IPv4 only.
+
+    Many cloud hosts (including Railway) have no IPv6 routing — DNS
+    returns AAAA records for smtp.gmail.com and the kernel can't reach
+    them, raising ENETUNREACH. Forcing IPv4 sidesteps the issue.
+    """
+    original = socket.getaddrinfo
+
+    def _ipv4_only(host, port, family=0, type=0, proto=0, flags=0):
+        return original(host, port, socket.AF_INET, type, proto, flags)
+
+    socket.getaddrinfo = _ipv4_only
+    try:
+        yield
+    finally:
+        socket.getaddrinfo = original
 
 
 @dataclass(frozen=True)
@@ -42,14 +64,15 @@ class Mailer:
             msg["References"] = email.in_reply_to
         msg.set_content(email.body)
 
-        if self._port == 465:
-            with smtplib.SMTP_SSL(self._host, self._port,
-                                  context=ssl.create_default_context()) as smtp:
-                smtp.login(self._user, self._pw)
-                smtp.send_message(msg)
-        else:
-            with smtplib.SMTP(self._host, self._port) as smtp:
-                smtp.starttls()
-                smtp.login(self._user, self._pw)
-                smtp.send_message(msg)
+        with _force_ipv4():
+            if self._port == 465:
+                with smtplib.SMTP_SSL(self._host, self._port,
+                                      context=ssl.create_default_context()) as smtp:
+                    smtp.login(self._user, self._pw)
+                    smtp.send_message(msg)
+            else:
+                with smtplib.SMTP(self._host, self._port) as smtp:
+                    smtp.starttls()
+                    smtp.login(self._user, self._pw)
+                    smtp.send_message(msg)
         return msg_id
