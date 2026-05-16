@@ -276,24 +276,64 @@ All timing relative to the 8:00:00.000 Central trigger (T+0).
 
 ### Phase 4: Race (T+0 to T+15s)
 
-1. **At T+0 exactly (08:00:00.000):** Fetch the tee-sheet listing for `target_date`.
-   - **The tee-sheet-list endpoint is not yet identified.** The captured HAR shows the slot-specific `POST /v5/pfcc_golf_m56/Member_slot` (used to render a single slot's booking form), but not the calendar-listing endpoint that shows ALL slots for a given date. This is a v1 blocker — see §11.
-   - Expected behavior: HTML or JSON listing of all 8-min slots for the date, each with `time`, `course`, `ttdata` token, `index`, and an availability flag
-2. Parse response. Extract for every available slot: `time`, `course`, `ttdata`, `index`, `availability`.
+1. **At T+0 exactly (08:00:00.000):** `GET https://www1.foretees.com/v5/pfcc_golf_m56/Member_sheet?calDate=MM/DD/YYYY&course=-ALL-&showAvail=-1&displayOpt=0` for the target date.
+   - Returns ~100 KB of HTML listing all slots for the date
+   - Each slot's row contains: `time`, `course`, `ttdata` token, `index`, and JavaScript click-handlers we can parse
+2. Parse the HTML. For every available slot extract `time`, `course`, `ttdata`, `index`, `day-of-week`.
 3. Build prioritized slot list:
-   - Filter: course matches request, time within `[window_start, window_end]`, slot is available
+   - Filter: course matches request, time within `[window_start, window_end]`, slot appears bookable (not greyed out)
    - Sort: `abs(slot_time - preferred_time)` ascending
-4. For each slot in priority order, submit the booking via `POST /v5/pfcc_golf_m56/Member_slot` with form-data:
-   - `date=<YYYYMMDD>`, `time:0=<slot_time>`, `course=<course>`, `index=<idx>`, `ttdata=<token>`
-   - `wasP1=&wasP2=&wasP3=&wasP4=` (no previous players)
-   - Player 1 = Carl + `CRT` (cart)
-   - Players 2-4 = `TBD`
-   - System codes: `s_c=pfcc&s_a=0&s_m=56`
-   - **Exact field names & success-response shape pending HAR capture of a real submit** (see §11)
-   - On success → break
-   - On "slot taken" or duplicate response → next slot
-   - On unexpected response → log + stop trying
+4. For each slot in priority order, submit the booking via `POST https://www1.foretees.com/v5/pfcc_golf_m56/Member_slot` with form-data combining the `callback_map` (always present) + the `slot_submit_map` (per-player) fields:
+
+   **callback_map** (always present, copied from the slot-selection step):
+   ```
+   lstate=0
+   newreq=yes
+   displayOpt=0
+   showAvail=-1
+   ttdata=<slot's token>
+   date=YYYYMMDD
+   index=<slot index>
+   course=<course name, e.g. "Green to Gold">
+   returnCourse=-ALL-
+   wasP1=&wasP2=&wasP3=&wasP4=&wasP5=
+   p5=Yes
+   time:0=<slot time, e.g. "9:08 AM">
+   day=<day of week>
+   contimes=1
+   s_c=pfcc
+   s_a=0
+   s_m=56
+   json_mode=true
+   ```
+
+   **slot_submit_map fields** (per-player; `%` placeholder expands to `a`, `b`, `c`, `d`):
+   ```
+   player_a=<Carl Pfiffner full name>
+   user_a=6605
+   member_id_a=10326
+   player_type_a=Member
+   pcw_a=CRT          ← cart flag
+   p9_a=18            ← 18 holes (not 9)
+   custom_disp_a=     ← empty for v1
+   guest_id_a=        ← empty for v1
+   player_b=TBD       ← spots 2-4 default to TBD; bot tries leaving them blank if "leave open" was Carl's prior pref
+   user_b=
+   member_id_b=
+   player_type_b=TBD
+   ... (same pattern for c, d)
+   id_list=           ← will be extracted from the slot-form response
+   id_hash=           ← will be extracted from the slot-form response
+   hide_notes=
+   notes=
+   ```
+   - On success → break out of the slot loop
+   - On "slot taken" or duplicate response → try next slot
+   - On unexpected response → log + abort
+
 5. Total wall-clock budget: ~15s. If exhausted, mark request `failed`.
+
+**Note on response-shape uncertainty:** the EXACT format of the success response (JSON shape, status code, confirmation-id field) is not fully known from the HAR — the captured session did not include a real submit. Success-detection logic must be defensive: parse the response, check for any explicit `error` / `failure` keys, but if shape is unexpected, fall back to "did we get the auto-confirmation email from ForeTees within 90s?" (or, if Carl has not configured forwarding, mark as "uncertain — please verify manually").
 
 ### Phase 5: Confirm (T+1s to T+30s)
 
@@ -444,6 +484,37 @@ send a new request with a wider window.
 
 ## 10. Operational
 
+### 10.1 First-run validation (mandatory before live use)
+
+Before relying on the bot for a real, competitive 8 AM booking, run this controlled test exactly once:
+
+1. Pick a **low-stakes target**: a weekday afternoon ~5-6 days out where Pine Forest typically has wide availability and no demand pressure (e.g., a Tuesday 3:00 PM tee time). The goal is to verify the bot's behavior, not to actually play.
+2. Carl emails the bot with a request for that low-stakes slot.
+3. The booker fires at 7:58 AM the corresponding morning (5 days before the target day).
+4. **Within 10 minutes of the bot reporting success**, Carl logs into ForeTees and cancels the test reservation manually. This:
+   - Validates that the booking was real and visible in ForeTees (not a falsely-reported success)
+   - Trains Carl on the cancel UI flow (he'll need it as the safety net)
+   - Releases the slot back for other members
+5. Will reviews the `audit_log` table to:
+   - Confirm the success-response shape we observed
+   - Compare booking latency against design target
+   - Spot any unexpected requests/responses
+6. **Only after a clean first-run test is the bot eligible for a competitive Monday booking.**
+
+If the first run fails or returns ambiguous data, treat that as new information and revise the implementation before trying again.
+
+### 10.2 Manual-cancel safety net
+
+This is the always-on fallback regardless of test status. Carl should know how to cancel a wrong booking from his phone:
+
+1. Go to `pfcc.clubhouseonline-e3.com` → log in → ForeTees → his name → "Tee Times" → "Make Change or View Tee Times"
+2. Find the reservation in the upcoming list
+3. Click the entry → "Cancel" → confirm
+
+Print this on an index card and keep it next to Carl's computer. The whole flow is <10 seconds once familiar.
+
+### 10.3 Hosting
+
 **Hosting:**
 - DigitalOcean Droplet, $4-6/mo, NYC1 or DAL1 (Dallas is geographically closer to Pine Forest, may help by single-digit ms for the 8 AM race)
 - Ubuntu 24.04 LTS, Python 3.12
@@ -474,20 +545,19 @@ send a new request with a wider window.
 
 ---
 
-## 11. Open Questions / Blockers
+## 11. Open Questions / Not-Yet-Verified
 
-These must be resolved before implementation:
+None of these are hard blockers anymore (a second HAR is no longer required), but each should be confirmed empirically during the designated first-run test (see §10.1):
 
-1. **Two unknown endpoints — both blockers.** Current HAR captured login + slot-selection but NOT (a) the calendar-listing endpoint that shows ALL available slots for a date, NOR (b) the final submit POST that confirms a booking. Need a second HAR that walks through both:
-   - The calendar/tee-sheet view (the page Carl sees when he picks a date)
-   - The final form Submit click
-   - The cancel flow (so we have the kill-switch endpoint too)
-   - Required to know: exact endpoint URLs, form-data field names for the final submit (vs. the slot-selection POST we have), response shape on success vs. "slot taken", any additional tokens/headers required
-2. **Bot Gmail account.** Will needs to create `teebotcarl@gmail.com` (or available alternative) and generate an app password.
-3. **VPS provisioning.** Will needs DigitalOcean account + credit card; documented setup steps will live in `docs/setup.md`.
-4. **Day offset verification.** Carl said the offset is +5 days; Carl's earlier message said +6. To be verified by inspecting the actual tee sheet calendar against system date.
-5. **Confirm time-slot granularity.** ForeTees appears to use 8-minute slots at Pine Forest based on the HAR. Verify against the calendar UI.
-6. **Password rotation cadence.** Suggest rotating Pine Forest password once after initial deploy (since current password has been transmitted through chat), then quarterly.
+1. **Success-response shape for booking POST.** Predicted format: JSON with confirmation fields. To be verified live during the first-run test.
+2. **"Slot taken" response shape.** Predicted: JSON with an error/already-booked field. Verified live.
+3. **`id_list` and `id_hash` field values.** These come from the slot-form-render response (HTML returned by clicking a slot). Implementation must parse them out of that response before submitting.
+4. **Cancel endpoint format.** Not captured in HAR. Carl can cancel manually via the ForeTees UI if needed — bot doesn't need to cancel programmatically in v1.
+5. **Bot Gmail account.** Will needs to create `teebotcarl@gmail.com` (or available alternative) and generate an app password.
+6. **VPS provisioning.** Will needs DigitalOcean account + credit card; documented setup steps will live in `docs/setup.md`.
+7. **Day offset verification.** Carl said the offset is +5 days; Carl's earlier message said +6. To be verified by inspecting the live calendar.
+8. **Confirm time-slot granularity.** ForeTees appears to use 8-minute slots at Pine Forest based on the HAR. Verify against the calendar UI.
+9. **Password rotation.** Pine Forest password should be rotated once after deploy (since the current value was transmitted through chat).
 
 ---
 
