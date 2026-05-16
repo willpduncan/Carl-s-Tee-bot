@@ -5,7 +5,8 @@ Automated ForeTees tee-time booking bot for Carl Pfiffner at Pine Forest Country
 ## Quick reference
 - Spec: [docs/specs/2026-05-15-foretees-bot-design.md](docs/specs/2026-05-15-foretees-bot-design.md)
 - Implementation plan: [docs/plans/2026-05-15-teebot-implementation.md](docs/plans/2026-05-15-teebot-implementation.md)
-- Deployment guide: [docs/setup.md](docs/setup.md)
+- Deployment: [docs/setup.md](docs/setup.md)
+- First-run protocol: [docs/first_run.md](docs/first_run.md)
 - Emergency runbook: [docs/EMERGENCY.md](docs/EMERGENCY.md)
 
 ## Local development
