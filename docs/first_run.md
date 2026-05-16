@@ -8,7 +8,7 @@ Choose a **Tuesday afternoon ~5-6 days out** where Pine Forest has wide availabi
 
 ## Step 2: Carl sends the request
 
-From `cpfiffner62@gmail.com`, email `teebotcarl@gmail.com`:
+From `cpfiffner62@gmail.com`, email `carlpfiffnerteebot@gmail.com`:
 
 ```
 Subject: tee time
@@ -23,11 +23,10 @@ Wait for the confirmation reply (within ~60s). Verify it matches what was sent.
 
 ## Step 3: Wait for the booker fire
 
-On the **morning 5 days before the target day**, the booker fires at 7:58 AM Central. Watch via SSH:
+On the **morning 5 days before the target day**, the booker fires at 7:58 AM Central. Watch the Railway logs from the dashboard, or via CLI:
 
 ```bash
-ssh root@<VPS-IP>
-journalctl -u teebot-booker.service -f
+railway logs
 ```
 
 You should see auth, warm hold, race, slot attempts. The whole sequence takes ~30-60 seconds.
@@ -37,9 +36,10 @@ You should see auth, warm hold, race, slot attempts. The whole sequence takes ~3
 After the booker emails Carl success:
 
 1. Carl logs into ForeTees and confirms the reservation is visible under his name at the booked time/course.
-2. Will (operator) inspects the audit log:
+2. Will (operator) inspects the audit log via Railway CLI:
    ```bash
-   sqlite3 /var/lib/teebot/teebot.db "SELECT timestamp, event_type, details FROM audit_log WHERE timestamp >= datetime('now', '-1 hour') ORDER BY id"
+   railway run sqlite3 /data/teebot.db \
+     "SELECT timestamp, event_type, details FROM audit_log WHERE timestamp >= datetime('now', '-1 hour') ORDER BY id"
    ```
 3. Note the `booking_attempted` row and the success-response body in `details`. This is the canonical success format we'll trust going forward.
 
@@ -62,11 +62,11 @@ The bot is then cleared for competitive Monday use.
 
 ## If the test fails
 
-- Booker errored out → check journalctl, fix the issue, repeat the test.
-- Booking succeeded but no email arrived → SMTP issue, check `mailer.py` / app password.
-- Booking succeeded but DB shows `failure` → response-shape mismatch in `submit_booking`, update the success heuristic in `src/teebot/foretees/booker.py`.
+- Booker errored out → check `railway logs`, fix the issue, repeat the test.
+- Booking succeeded but no email arrived → SMTP issue, check `mailer.py` / Gmail app password.
+- Booking succeeded but DB shows `failure` → response-shape mismatch in `submit_booking`, update the success heuristic in `src/teebot/foretees/booker.py`, push to git, Railway redeploys.
 - Slot wasn't actually reserved in ForeTees → false-positive success classifier, same fix.
-- **Most likely failure mode:** the tee-sheet parser doesn't find any slots in the real ForeTees response (the test fixture was synthesized from incomplete HAR data — see Task 10 note). To fix: SSH to VPS, run `.venv/bin/python -c "from teebot.foretees.session import ForeTeesSession; from teebot.foretees.auth import login; from teebot.foretees.tee_sheet import fetch_tee_sheet_html; import os; from datetime import date, timedelta; s = ForeTeesSession(); login(s, username=os.environ['FORETEES_USERNAME'], password=os.environ['FORETEES_PASSWORD']); html = fetch_tee_sheet_html(s, date.today() + timedelta(days=5)); open('/tmp/live_tee_sheet.html','w').write(html); print(len(html))"`. Then inspect `/tmp/live_tee_sheet.html` to see how slots are actually encoded, and update `parse_tee_sheet()` accordingly.
+- **Most likely failure mode:** the tee-sheet parser doesn't find any slots in the real ForeTees response (the test fixture was synthesized from incomplete HAR data — see Task 10 note). Diagnostic command (see `docs/EMERGENCY.md` → "Tee-sheet parsing returns 0 slots" section). Inspect the real HTML and update `parse_tee_sheet()` accordingly, then `git push`.
 
 ## Sign-off log
 

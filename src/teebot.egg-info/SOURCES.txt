@@ -1,0 +1,7 @@
+pyproject.toml
+src/teebot/__init__.py
+src/teebot.egg-info/PKG-INFO
+src/teebot.egg-info/SOURCES.txt
+src/teebot.egg-info/dependency_links.txt
+src/teebot.egg-info/requires.txt
+src/teebot.egg-info/top_level.txt
