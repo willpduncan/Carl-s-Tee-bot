@@ -74,6 +74,13 @@ def submit_booking(
         )
 
     text = r.text
+    import logging
+    logging.getLogger("teebot.booker").info(
+        "Booking POST response: status=%s ctype=%s body_snippet=%r",
+        r.status_code,
+        r.headers.get("content-type", "?"),
+        text[:600],
+    )
     # Try parsing as JSON first
     try:
         body = json.loads(text)
