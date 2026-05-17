@@ -119,19 +119,27 @@ def login(session: ForeTeesSession, *, username: str, password: str) -> AuthResu
     if "www1.foretees.com" in str(r.url):
         return AuthResult(success=True, foretees_landing_url=str(r.url))
 
-    # 6. Otherwise this is a Clubhouse page with an auto-submit form that
-    #    POSTs SSO tokens to ForeTees. Parse the form, submit it ourselves.
+    # 6. Otherwise this is a Clubhouse page with an auto-submit form. The
+    #    page's static form.action points back at itself (ASP.NET postback);
+    #    JavaScript rewrites it before submission to www1.foretees.com/v5/servlet/Login.
+    #    Since we don't execute JS, we redirect the POST manually.
     soup = BeautifulSoup(r.text, "lxml")
     form = soup.find("form")
     if form is None:
         raise AuthError(
             f"SSO bridge has no <form> to submit (landed at {r.url})"
         )
-    action = form.get("action", "")
-    if not action:
-        raise AuthError("SSO bridge form has no action URL")
-    if not action.startswith("http"):
-        action = str(r.url.join(action))
+
+    # Try to find a www1.foretees.com URL embedded anywhere in the page
+    # (HTML attribute, script, etc.). If found, use that as the action.
+    sso_target_match = re.search(
+        r"https?://www1?\.foretees\.com[^\s\"'<>]*", r.text
+    )
+    if sso_target_match:
+        action = sso_target_match.group(0)
+    else:
+        # Fallback: use the known SSO endpoint from HAR analysis
+        action = "https://www1.foretees.com/v5/servlet/Login"
 
     sso_fields: dict[str, str] = {}
     for inp in form.find_all("input"):
