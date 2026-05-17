@@ -65,6 +65,14 @@ def login(session: ForeTeesSession, *, username: str, password: str) -> AuthResu
     form_fields["ctl00$mainContentPlaceHolder$Login1$LoginButton"] = "Login"
 
     r = session.client.post(CLUBHOUSE_LOGIN_URL, data=form_fields)
+
+    import logging
+    _log = logging.getLogger("teebot.auth")
+    _log.info(
+        "Login POST result: status=%s final_url=%s body_snippet=%r",
+        r.status_code, str(r.url), r.text[:500],
+    )
+
     if "Invalid username or password" in r.text or "login.aspx" in str(r.url).lower():
         raise AuthError("Clubhouse Online login failed (invalid credentials?)")
     if r.status_code != 200:
