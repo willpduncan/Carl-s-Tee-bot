@@ -31,35 +31,34 @@ def submit_booking(
 
     Returns a BookingResult; never raises (network errors → success=False).
     """
-    # Build payload from callback_map + per-player fields
-    payload = dict(form.callback_map)  # copy
+    # Per-player arrays — ForeTees expects fields like player_a, user_a, etc.
+    # to appear N times (multi-value), one per player slot. Carl is player 1;
+    # other 4 spots stay empty (TBD/blank).
+    PLAYERS = 5
+    player_a = [member_name] + [""] * (PLAYERS - 1)
+    user_a = [member_user] + [""] * (PLAYERS - 1)
+    member_id_a = [member_id] + [""] * (PLAYERS - 1)
+    player_type_a = ["Member"] + [""] * (PLAYERS - 1)
+    pcw_a = ["CRT"] + [""] * (PLAYERS - 1)
+    p9_a = ["18"] + ["18"] * (PLAYERS - 1)
+    guest_id_a = [""] * PLAYERS
+    custom_disp_a = [""] * PLAYERS
+
+    # Build form data; dict-with-list-values encodes multi-value form fields
+    # like player_a=Carl&player_a=&player_a=...
+    payload: dict[str, object] = {k: str(v) for k, v in form.callback_map.items()}
     payload["id_list"] = form.id_list
     payload["id_hash"] = form.id_hash
-    payload["hide_notes"] = ""
+    payload["hide_notes"] = "0"
     payload["notes"] = ""
-
-    # Player 1 = Carl
-    payload["player_a"] = member_name
-    payload["user_a"] = member_user
-    payload["member_id_a"] = member_id
-    payload["player_type_a"] = "Member"
-    payload["pcw_a"] = "CRT"
-    payload["p9_a"] = "18"
-    payload["custom_disp_a"] = ""
-    payload["guest_id_a"] = ""
-
-    # Players 2-4 = TBD
-    for letter in ("b", "c", "d"):
-        payload[f"player_{letter}"] = "TBD"
-        payload[f"user_{letter}"] = ""
-        payload[f"member_id_{letter}"] = ""
-        payload[f"player_type_{letter}"] = "TBD"
-        payload[f"pcw_{letter}"] = ""
-        payload[f"p9_{letter}"] = "18"
-        payload[f"custom_disp_{letter}"] = ""
-        payload[f"guest_id_{letter}"] = ""
-
-    payload["json_mode"] = "true"
+    payload["player_a"] = player_a
+    payload["user_a"] = user_a
+    payload["member_id_a"] = member_id_a
+    payload["player_type_a"] = player_type_a
+    payload["pcw_a"] = pcw_a
+    payload["p9_a"] = p9_a
+    payload["guest_id_a"] = guest_id_a
+    payload["custom_disp_a"] = custom_disp_a
 
     try:
         r = session.client.post(MEMBER_SLOT_URL, data=payload)
@@ -89,6 +88,16 @@ def submit_booking(
                 return BookingResult(
                     success=True,
                     reservation_id=body.get("reservation_id") or body.get("id"),
+                    raw_response=text,
+                )
+            # If ForeTees returned the slot-form config instead of a booking
+            # result, our submit didn't trigger "submit" mode. Bail rather
+            # than hammering every slot with the same broken request.
+            if "show_member_tbd" in body or "page_title" in body or "slot_url" in body:
+                return BookingResult(
+                    success=False,
+                    error_message="server returned slot-form config (submit mode not engaged)",
+                    unexpected_response=True,
                     raw_response=text,
                 )
             err = body.get("error") or body.get("message") or ""

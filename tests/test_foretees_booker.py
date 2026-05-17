@@ -41,13 +41,11 @@ def slot_form():
 
 
 def test_submit_booking_success(slot, slot_form):
-    submitted_body = {}
+    from urllib.parse import parse_qs
+    submitted: dict[str, list[str]] = {}
     def handler(req: httpx.Request) -> httpx.Response:
-        body = req.content.decode()
-        for kv in body.split("&"):
-            if "=" in kv:
-                k, v = kv.split("=", 1)
-                submitted_body[k] = v
+        nonlocal submitted
+        submitted = parse_qs(req.content.decode(), keep_blank_values=True)
         return httpx.Response(
             200,
             json={"status": "success", "reservation_id": "RES12345"},
@@ -61,14 +59,13 @@ def test_submit_booking_success(slot, slot_form):
     s.close()
     assert result.success
     assert result.reservation_id == "RES12345"
-    # Validate that critical fields were submitted
-    assert submitted_body.get("ttdata") == "TOKEN123"
-    assert "player_a" in submitted_body
-    assert "user_a" in submitted_body
-    assert submitted_body.get("pcw_a") == "CRT"
-    assert submitted_body.get("p9_a") == "18"
-    assert submitted_body.get("id_list") == "ID_LIST_VAL"
-    assert submitted_body.get("id_hash") == "ID_HASH_VAL"
+    # Validate critical fields submitted (multi-value: 5 entries per player field)
+    assert submitted.get("ttdata") == ["TOKEN123"]
+    assert submitted.get("player_a") == ["Carl A Pfiffner", "", "", "", ""]
+    assert submitted.get("user_a") == ["6605", "", "", "", ""]
+    assert submitted.get("pcw_a") == ["CRT", "", "", "", ""]
+    assert submitted.get("id_list") == ["ID_LIST_VAL"]
+    assert submitted.get("id_hash") == ["ID_HASH_VAL"]
 
 
 def test_submit_booking_slot_taken(slot, slot_form):
