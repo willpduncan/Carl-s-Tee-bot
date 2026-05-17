@@ -45,6 +45,27 @@ def _extract_foretees_link(html: str) -> str:
     raise AuthError("ForeTees launch link not found on Member Central page")
 
 
+def _find_login_field_names(html: str) -> dict[str, str]:
+    """Discover the actual username/password/login-button field names.
+
+    Pine Forest's Clubhouse Online uses Kentico CMS with verbose compound
+    field names that vary by widget config. We match by suffix.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    out: dict[str, str] = {}
+    for inp in soup.find_all("input"):
+        name = inp.get("name", "")
+        if not name:
+            continue
+        if name.endswith("$UserName"):
+            out["username"] = name
+        elif name.endswith("$Password"):
+            out["password"] = name
+        elif name.endswith("$LoginButton"):
+            out["login_button"] = name
+    return out
+
+
 def login(session: ForeTeesSession, *, username: str, password: str) -> AuthResult:
     """Run the full Clubhouse → SSO → ForeTees login chain.
 
@@ -59,10 +80,16 @@ def login(session: ForeTeesSession, *, username: str, password: str) -> AuthResu
     if "__VIEWSTATE" not in form_fields:
         raise AuthError("Could not find __VIEWSTATE in login page")
 
-    # 2. POST credentials
-    form_fields["ctl00$mainContentPlaceHolder$Login1$UserName"] = username
-    form_fields["ctl00$mainContentPlaceHolder$Login1$Password"] = password
-    form_fields["ctl00$mainContentPlaceHolder$Login1$LoginButton"] = "Login"
+    # 2. Discover the actual login field names + POST credentials
+    field_names = _find_login_field_names(r.text)
+    missing = {"username", "password", "login_button"} - field_names.keys()
+    if missing:
+        raise AuthError(
+            f"Could not find login form fields {missing} on login.aspx"
+        )
+    form_fields[field_names["username"]] = username
+    form_fields[field_names["password"]] = password
+    form_fields[field_names["login_button"]] = "Login"
 
     r = session.client.post(CLUBHOUSE_LOGIN_URL, data=form_fields)
 
