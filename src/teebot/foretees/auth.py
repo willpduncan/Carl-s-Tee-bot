@@ -110,11 +110,45 @@ def login(session: ForeTeesSession, *, username: str, password: str) -> AuthResu
     if not ft_href.startswith("http"):
         ft_href = str(r.url.join(ft_href))
 
-    # 4. Follow it (will SSO-redirect to www1.foretees.com)
+    # 4. GET the SSO bridge page (Clubhouse Online side)
     r = session.client.get(ft_href)
     if r.status_code != 200:
-        raise AuthError(f"ForeTees SSO returned {r.status_code}")
+        raise AuthError(f"ForeTees SSO bridge returned {r.status_code}")
+
+    # 5. If we already landed on ForeTees, we're done
+    if "www1.foretees.com" in str(r.url):
+        return AuthResult(success=True, foretees_landing_url=str(r.url))
+
+    # 6. Otherwise this is a Clubhouse page with an auto-submit form that
+    #    POSTs SSO tokens to ForeTees. Parse the form, submit it ourselves.
+    soup = BeautifulSoup(r.text, "lxml")
+    form = soup.find("form")
+    if form is None:
+        raise AuthError(
+            f"SSO bridge has no <form> to submit (landed at {r.url})"
+        )
+    action = form.get("action", "")
+    if not action:
+        raise AuthError("SSO bridge form has no action URL")
+    if not action.startswith("http"):
+        action = str(r.url.join(action))
+
+    sso_fields: dict[str, str] = {}
+    for inp in form.find_all("input"):
+        name = inp.get("name")
+        if name:
+            sso_fields[name] = inp.get("value", "")
+
+    _log.info(
+        "Submitting SSO form: action=%s field_count=%d",
+        action, len(sso_fields),
+    )
+    r = session.client.post(action, data=sso_fields)
+    if r.status_code != 200:
+        raise AuthError(f"ForeTees SSO POST returned {r.status_code}")
     if "www1.foretees.com" not in str(r.url):
-        raise AuthError(f"Expected to land on foretees.com but landed at {r.url}")
+        raise AuthError(
+            f"After SSO POST, expected to land on foretees.com but got {r.url}"
+        )
 
     return AuthResult(success=True, foretees_landing_url=str(r.url))
