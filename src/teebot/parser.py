@@ -140,11 +140,13 @@ def _parse_time(token: str) -> str:
 
 
 def _extract_window_and_preferred(text: str) -> tuple[str, str, str | None]:
-    # Look for "X to Y", "X-Y", or "between X and Y"
+    # Look for "X to Y", "X-Y", "between X and Y", or "Window: X Y" (whitespace-only)
     range_pats = [
         r"window[:\s]+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*(?:to|-|–|—)\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)",
         r"between\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s+and\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)",
         r"(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*(?:to|-|–|—)\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)",
+        # Lenient fallback: "Window: X Y" with just whitespace (Carl-friendly)
+        r"window[:\s]+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)",
     ]
     start = end = None
     for pat in range_pats:
