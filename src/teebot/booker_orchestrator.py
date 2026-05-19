@@ -215,17 +215,43 @@ class BookerOrchestrator:
                         self._audit("slot_form_failed", success=False, error=str(e),
                                     slot_time=slot.time, request_id=request_id)
                         continue
+                    # Try with X (block other members). If the club rejects X
+                    # for being "not far enough in advance," retry leaving
+                    # the other slots empty (TBD).
                     result = submit_booking(
-                        sess,
-                        slot=slot,
-                        form=form,
+                        sess, slot=slot, form=form,
                         member_id=self.member_id,
                         member_name=self.member_name,
                         member_user=self.member_user,
+                        block_other_slots=True,
                     )
                     self._audit("booking_attempted", success=result.success,
                                 slot_time=slot.time, result_msg=result.error_message,
                                 request_id=request_id)
+                    if (not result.success
+                            and result.error_message
+                            and "'X'" in result.error_message
+                            and "not allowed" in result.error_message):
+                        # Retry the SAME slot without X-out
+                        self._audit("retry_without_x", success=True,
+                                    slot_time=slot.time, request_id=request_id)
+                        # Re-fetch the slot form (CSRF tokens are single-use)
+                        try:
+                            form2 = fetch_slot_form(sess, slot, target_date_str)
+                        except Exception as e:
+                            self._audit("slot_form_refetch_failed", success=False,
+                                        error=str(e), request_id=request_id)
+                            continue
+                        result = submit_booking(
+                            sess, slot=slot, form=form2,
+                            member_id=self.member_id,
+                            member_name=self.member_name,
+                            member_user=self.member_user,
+                            block_other_slots=False,
+                        )
+                        self._audit("booking_attempted_no_x", success=result.success,
+                                    slot_time=slot.time, result_msg=result.error_message,
+                                    request_id=request_id)
                     if result.success:
                         successful_slot = slot
                         successful_result = result

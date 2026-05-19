@@ -112,6 +112,23 @@ def submit_booking(
                     unexpected_response=True,
                     raw_response=text,
                 )
+
+            # ForeTees returns errors in notice_list / warning_list (HTML strings).
+            # Non-empty notice_list = failure, even on a 200 response.
+            notice_list = body.get("notice_list") or []
+            warning_list = body.get("warning_list") or []
+            if notice_list or warning_list:
+                import re as _re
+                combined = " ".join(notice_list + warning_list)
+                # Strip HTML tags for a readable message
+                plain = _re.sub(r"<[^>]+>", " ", combined)
+                plain = _re.sub(r"\s+", " ", plain).strip()
+                return BookingResult(
+                    success=False,
+                    error_message=plain[:300] or body.get("title", "booking rejected"),
+                    raw_response=text,
+                )
+
             # Explicit success markers
             if body.get("status") == "success" or "reservation_id" in body or "confirmation_id" in body:
                 return BookingResult(
@@ -123,7 +140,8 @@ def submit_booking(
                     ),
                     raw_response=text,
                 )
-            # Explicit error markers
+
+            # Explicit error markers (top-level error/message field)
             err = body.get("error") or body.get("message")
             if err:
                 return BookingResult(
@@ -131,9 +149,8 @@ def submit_booking(
                     error_message=str(err),
                     raw_response=text,
                 )
-            # JSON response that's not the slot-form config and not an
-            # explicit error → ForeTees accepted the submit. Empty {}
-            # responses are observed after successful bookings.
+
+            # No errors, no slot-form fingerprint → ForeTees accepted the submit.
             return BookingResult(
                 success=True,
                 reservation_id=None,
