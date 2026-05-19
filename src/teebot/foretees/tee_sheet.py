@@ -99,9 +99,15 @@ def parse_tee_sheet(html: str) -> list[Slot]:
         if not ttdata:
             continue
 
-        # Availability: wasP1 empty means no primary player has claimed the slot
-        was_p1 = (data.get("wasP1") or "").strip()
-        available = (was_p1 == "")
+        # Availability: ALL 5 player slots must be empty so Carl doesn't
+        # join an existing group. wasP1..wasP5 represent currently-booked
+        # players; any non-empty value means another member is already in
+        # this tee time.
+        was_p_fields = [
+            (data.get(f"wasP{n}") or "").strip()
+            for n in range(1, 6)
+        ]
+        available = all(v == "" for v in was_p_fields)
 
         slots.append(Slot(
             time=time_24,
