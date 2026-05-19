@@ -1,4 +1,20 @@
-"""Submit the final booking POST to Member_slot."""
+"""Submit the final booking POST to Member_slot.
+
+Wire format derived from a real captured submit (HAR entry 122 of
+the 2026-05-19 capture). Critical fields that distinguish a submit
+from a slot-click:
+  - submitForm = "submit"
+  - slot_submit_action = "update"
+
+Per-player fields are NUMBERED 1-5 (not lettered a-d):
+  - player1..player5    name (or "X" to block)
+  - user1..user5        empty when booking self; non-empty for partner
+  - member_id1..5       member id for self, "0" for X/empty
+  - player_type_a1..5   empty for self-booking
+  - p91..p95            0 = 18 holes, 1 = 9 holes
+  - p1cw..p5cw          "CRT" = cart, others available
+  - guest_id1..5        "0" = not a guest
+"""
 from __future__ import annotations
 
 import json
@@ -26,39 +42,42 @@ def submit_booking(
     member_id: str,
     member_name: str,
     member_user: str,
+    block_other_slots: bool = True,
 ) -> BookingResult:
-    """POST Member_slot with the full booking payload (Carl + 3 TBDs).
+    """POST Member_slot with the booking payload. Carl is player 1;
+    other 4 slots are marked "X" (blocked) by default so no other member
+    can join his group.
 
-    Returns a BookingResult; never raises (network errors → success=False).
+    If block_other_slots=False, other slots are left as empty TBDs.
     """
-    # Per-player arrays — ForeTees expects fields like player_a, user_a, etc.
-    # to appear N times (multi-value), one per player slot. Carl is player 1;
-    # other 4 spots stay empty (TBD/blank).
-    PLAYERS = 5
-    player_a = [member_name] + [""] * (PLAYERS - 1)
-    user_a = [member_user] + [""] * (PLAYERS - 1)
-    member_id_a = [member_id] + [""] * (PLAYERS - 1)
-    player_type_a = ["Member"] + [""] * (PLAYERS - 1)
-    pcw_a = ["CRT"] + [""] * (PLAYERS - 1)
-    p9_a = ["18"] + ["18"] * (PLAYERS - 1)
-    guest_id_a = [""] * PLAYERS
-    custom_disp_a = [""] * PLAYERS
+    # Player 1 = Carl
+    payload: dict[str, str] = {
+        "teecurr_id1": form.id_list,
+        "id_hash": form.id_hash,
+        "hide": "0",
+        "notes": "",
+        "submitForm": "submit",
+        "slot_submit_action": "update",
+        "json_mode": "true",
+        "player1": member_name,
+        "user1": "",
+        "member_id1": member_id,
+        "player_type_a1": "",
+        "p91": "0",
+        "p1cw": "CRT",
+        "guest_id1": "0",
+    }
 
-    # Build form data; dict-with-list-values encodes multi-value form fields
-    # like player_a=Carl&player_a=&player_a=...
-    payload: dict[str, object] = {k: str(v) for k, v in form.callback_map.items()}
-    payload["id_list"] = form.id_list
-    payload["id_hash"] = form.id_hash
-    payload["hide_notes"] = "0"
-    payload["notes"] = ""
-    payload["player_a"] = player_a
-    payload["user_a"] = user_a
-    payload["member_id_a"] = member_id_a
-    payload["player_type_a"] = player_type_a
-    payload["pcw_a"] = pcw_a
-    payload["p9_a"] = p9_a
-    payload["guest_id_a"] = guest_id_a
-    payload["custom_disp_a"] = custom_disp_a
+    # Players 2-5 — X to block other members from joining, or empty for TBD
+    fill_name = "X" if block_other_slots else ""
+    for n in (2, 3, 4, 5):
+        payload[f"player{n}"] = fill_name
+        payload[f"user{n}"] = ""
+        payload[f"member_id{n}"] = "0"
+        payload[f"player_type_a{n}"] = ""
+        payload[f"p9{n}"] = "0"
+        payload[f"p{n}cw"] = "CRT"
+        payload[f"guest_id{n}"] = "0"
 
     try:
         r = session.client.post(MEMBER_SLOT_URL, data=payload)
@@ -80,19 +99,12 @@ def submit_booking(
         r.headers.get("content-type", "?"),
         text[:600],
     )
+
     # Try parsing as JSON first
     try:
-        body = json.loads(text)
+        body = json.loads(text) if text else {}
         if isinstance(body, dict):
-            if body.get("status") == "success" or "reservation_id" in body:
-                return BookingResult(
-                    success=True,
-                    reservation_id=body.get("reservation_id") or body.get("id"),
-                    raw_response=text,
-                )
-            # If ForeTees returned the slot-form config instead of a booking
-            # result, our submit didn't trigger "submit" mode. Bail rather
-            # than hammering every slot with the same broken request.
+            # Slot-form config returned → submit didn't engage (bail)
             if "show_member_tbd" in body or "page_title" in body or "slot_url" in body:
                 return BookingResult(
                     success=False,
@@ -100,10 +112,31 @@ def submit_booking(
                     unexpected_response=True,
                     raw_response=text,
                 )
-            err = body.get("error") or body.get("message") or ""
+            # Explicit success markers
+            if body.get("status") == "success" or "reservation_id" in body or "confirmation_id" in body:
+                return BookingResult(
+                    success=True,
+                    reservation_id=(
+                        body.get("reservation_id")
+                        or body.get("confirmation_id")
+                        or body.get("id")
+                    ),
+                    raw_response=text,
+                )
+            # Explicit error markers
+            err = body.get("error") or body.get("message")
+            if err:
+                return BookingResult(
+                    success=False,
+                    error_message=str(err),
+                    raw_response=text,
+                )
+            # JSON response that's not the slot-form config and not an
+            # explicit error → ForeTees accepted the submit. Empty {}
+            # responses are observed after successful bookings.
             return BookingResult(
-                success=False,
-                error_message=str(err),
+                success=True,
+                reservation_id=None,
                 raw_response=text,
             )
     except json.JSONDecodeError:
